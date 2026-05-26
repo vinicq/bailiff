@@ -2,9 +2,10 @@ import logging
 import multiprocessing
 import queue
 import threading
+from multiprocessing.queues import Queue as ProcessQueue
 
 from bailiff.core.config import AudioConfig
-from bailiff.core.db import SessionLocal
+from bailiff.core.db import get_session, init_db
 from bailiff.features.assistant.service import run_assistant_service
 from bailiff.features.audio_ingest.service import run_ingest_service
 from bailiff.features.diarization.merge import run_merge_service
@@ -15,36 +16,39 @@ from bailiff.features.transcription.service import run_transcription_service
 
 logger = logging.getLogger("bailiff.core.session")
 
+
 class SessionManager:
-    """
-    Manages the lifecycle of a recording session, including background processes and data flow.
-    """
-    def __init__(self, log_file="bailiff.log"):
+    # q_health carries tuples of (worker_name: str, exception_repr: str) from children to the supervisor.
+    def __init__(self, log_file="bailiff.log", graceful_timeout: float = 5.0):
         self.log_file = log_file
-        
-        # Queues
-        self.q_audio_raw = multiprocessing.Queue()    # ingest output
-        self.q_audio_tx = multiprocessing.Queue()     # copy for transcription
-        self.q_audio_diar = multiprocessing.Queue()   # copy for diarization
+        self.graceful_timeout = graceful_timeout
 
-        self.q_text = multiprocessing.Queue()          # transcription output
-        self.q_diarization = multiprocessing.Queue()   # diarization output
-        self.q_merged = multiprocessing.Queue()        # merge output -> UI
+        init_db()
 
-        self.q_memory = multiprocessing.Queue()
-        self.q_question = multiprocessing.Queue()
-        self.q_answer = multiprocessing.Queue()
-        self.q_rag = multiprocessing.Queue()
-        
-        # Session ID initialization
+        self.q_audio_raw: ProcessQueue = multiprocessing.Queue(maxsize=200)
+        self.q_audio_tx: ProcessQueue = multiprocessing.Queue(maxsize=200)
+        self.q_audio_diar: ProcessQueue = multiprocessing.Queue(maxsize=200)
+
+        self.q_text: ProcessQueue = multiprocessing.Queue(maxsize=500)
+        self.q_diarization: ProcessQueue = multiprocessing.Queue(maxsize=500)
+        self.q_merged: ProcessQueue = multiprocessing.Queue(maxsize=500)
+
+        self.q_memory: ProcessQueue = multiprocessing.Queue(maxsize=500)
+        self.q_question: ProcessQueue = multiprocessing.Queue(maxsize=50)
+        self.q_answer: ProcessQueue = multiprocessing.Queue(maxsize=50)
+        self.q_rag: ProcessQueue = multiprocessing.Queue(maxsize=50)
+
+        self.q_health: ProcessQueue = multiprocessing.Queue(maxsize=200)
+
         self.session_id = self._create_session()
-        
-        self._fanout_stop = threading.Event()
-        self.processes = []
-        self._fanout_thread = None
+
+        self._running = threading.Event()
+        self._fanout_thread: threading.Thread | None = None
+        self._supervisor_thread: threading.Thread | None = None
+        self.processes: list[multiprocessing.Process] = []
 
     def _create_session(self):
-        db = SessionLocal()
+        db = get_session()
         try:
             storage = MeetingStorage(db)
             session = storage.create_session()
@@ -53,32 +57,39 @@ class SessionManager:
             db.close()
 
     def _audio_fanout(self):
-        """
-        Duplicate audio chunks from ingest to both transcription and diarization queues.
-        """
-        while not self._fanout_stop.is_set():
+        while self._running.is_set():
             try:
                 chunk = self.q_audio_raw.get(timeout=0.5)
             except queue.Empty:
                 continue
             if chunk is None:
-                self.q_audio_tx.put(None)
-                self.q_audio_diar.put(None)
-                break  # poison pill forwarded to both consumers
-            self.q_audio_tx.put(chunk)
-            self.q_audio_diar.put(chunk)
+                self._safe_put(self.q_audio_tx, None)
+                self._safe_put(self.q_audio_diar, None)
+                break
+            self._safe_put(self.q_audio_tx, chunk)
+            self._safe_put(self.q_audio_diar, chunk)
+
+    def _supervisor(self):
+        while self._running.is_set():
+            try:
+                event = self.q_health.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            if event is None:
+                break
+            worker_name, exc_repr = event
+            logger.critical("Fatal error in worker %s: %s", worker_name, exc_repr)
+            threading.Thread(target=self.stop, daemon=True, name="supervisor-stop").start()
+            break
 
     def start(self):
-        """
-        Start all background processes and the fanout thread.
-        """
-        # Fan-out thread
+        self._running.set()
+
         self._fanout_thread = threading.Thread(
             target=self._audio_fanout, daemon=True, name="audio-fanout"
         )
         self._fanout_thread.start()
 
-        # Processes
         self.processes = [
             multiprocessing.Process(
                 target=run_ingest_service,
@@ -120,32 +131,54 @@ class SessionManager:
 
         for p in self.processes:
             p.start()
-            
+
+        self._supervisor_thread = threading.Thread(
+            target=self._supervisor, daemon=True, name="health-supervisor"
+        )
+        self._supervisor_thread.start()
+
     def stop(self):
-        """
-        Stop all processes and threads, and close queues.
-        """
-        self._fanout_stop.set()
-        
+        if not self._running.is_set():
+            return
+        self._running.clear()
+
+        self._safe_put(self.q_audio_raw, None)
+        self._safe_put(self.q_text, None)
+        self._safe_put(self.q_diarization, None)
+        self._safe_put(self.q_memory, None)
+        self._safe_put(self.q_question, None)
+
+        for p in self.processes:
+            p.join(timeout=self.graceful_timeout)
+
         for p in self.processes:
             if p.is_alive():
+                logger.warning("Process %s did not exit gracefully, terminating", p.name)
                 p.terminate()
-                p.join(timeout=3)
-                
-        # Close queues
+                p.join(timeout=2.0)
+
+        if self._fanout_thread and self._fanout_thread.is_alive():
+            self._fanout_thread.join(timeout=2.0)
+
+        if self._supervisor_thread and self._supervisor_thread.is_alive():
+            self._safe_put(self.q_health, None)
+            self._supervisor_thread.join(timeout=2.0)
+
         for q in [
             self.q_audio_raw, self.q_audio_tx, self.q_audio_diar,
             self.q_text, self.q_diarization, self.q_merged,
-            self.q_memory, self.q_answer, self.q_rag # q_question is input only usually? but good to close
+            self.q_memory, self.q_question, self.q_answer, self.q_rag,
+            self.q_health,
         ]:
-            # q_question might be written to by UI, closing it is fine if we are stopping.
             try:
                 q.close()
+                q.cancel_join_thread()
             except Exception as e:
-                logger.error(f"Error closing queue: {e}")
-        
-        # q_question was missed in the list above
+                logger.error("Error closing queue: %s", e)
+
+    @staticmethod
+    def _safe_put(q: ProcessQueue, item) -> None:
         try:
-            self.q_question.close()
+            q.put(item, timeout=1.0)
         except Exception:
             pass

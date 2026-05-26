@@ -12,20 +12,23 @@ logger = logging.getLogger("bailiff.features.diarization.service")
 class DiarizationService:
     """
     Service wrapper for running the DiarizationEngine.
-
-    Initialize and runs the diarization engine in a separate process.
     """
-    def __init__(self, 
-                 input_queue: ProcessQueue, 
-                 output_queue: ProcessQueue,
-                 engine_factory: Callable[..., DiarizationEngine] | None = None):
+    def __init__(
+        self,
+        input_queue: ProcessQueue,
+        output_queue: ProcessQueue,
+        engine_factory: Callable[..., DiarizationEngine] | None = None,
+    ):
         self.input_queue = input_queue
         self.output_queue = output_queue
         self.engine_factory = engine_factory or (
             lambda iq, oq: DiarizationEngine(
-                iq, oq,
+                iq,
+                oq,
+                model_source=settings.models.voice_embedding,
                 threshold=settings.diarization.threshold,
                 inertia_weight=settings.diarization.inertia_weight,
+                max_speakers=settings.diarization.max_speakers,
             )
         )
 
@@ -38,9 +41,10 @@ class DiarizationService:
 
 
 def run_diarization_service(
-        input_queue: ProcessQueue, 
-        output_queue: ProcessQueue,
-        log_file: str | None = None):
+    input_queue: ProcessQueue,
+    output_queue: ProcessQueue,
+    log_file: str | None = None,
+):
     setup_logging(log_file=log_file)
     service = DiarizationService(input_queue, output_queue)
     service.run()

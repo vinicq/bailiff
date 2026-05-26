@@ -10,8 +10,9 @@ sqlalchemy
 chromadb
 instructor
 openai
+httpx
 speechbrain
 pydantic
 pydantic-settings
 pyyaml
-huggingface_hub<0.25.0
+huggingface_hub

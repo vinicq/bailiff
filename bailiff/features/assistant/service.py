@@ -43,10 +43,9 @@ class AssistantService:
         api_key = settings.models.llm_api_key.get_secret_value() if settings.models.llm_api_key else None
         base_url = settings.models.llm_base_url
         model = settings.models.llm_assistant
-        
-        if not api_key and settings.models.llm_provider != "ollama":
-            logger.warning("LLM API Key not found in configuration, but might not be needed for local models.")
-            # return # Don't return, let it fail downstream if needed or work if it's local
+
+        if api_key is None and settings.models.llm_provider != "ollama":
+            raise RuntimeError("llm_api_key is required when llm_provider != 'ollama'")
 
         if not model:
             logger.error("LLM Model not configured.")

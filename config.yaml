@@ -19,12 +19,13 @@ models:
 
 diarization:
   threshold: 0.5 # Similarity threshold for speaker diarization
-  inertia_weight: 0.1 # Weight added for previous speaker 
+  inertia_weight: 0.1 # Weight added for previous speaker
   merge_timeout: 8.0 # Timeout for merging speaker segments
   segment_timeout: 3.0 # Timeout for speaker segments
+  max_speakers: 16 # Cap on distinct speaker buckets
 
 transcription:
-  model_size: "small" # For GPU i recommend "deepdml/faster-whisper-large-v3-turbo-ct2" 
-  device: "cpu" # For GPU i recommend "cuda" 
-  compute_type: "int8" # For GPU i recommend "float16"
+  model_size: "small" # faster-whisper alias or any HF model id; "large-v2" for best quality, "deepdml/faster-whisper-large-v3-turbo-ct2" on GPU
+  device: "cpu" # set "cuda" if you have a working GPU build
+  compute_type: "int8" # use "float16" with cuda
   language: en # Set a language code (e.g. "pt", "en", "es") or leave null for auto-detect
