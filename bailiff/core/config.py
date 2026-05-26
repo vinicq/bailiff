@@ -52,10 +52,14 @@ class DiarizationConfig(BaseSettings):
 
 
 class TranscriptionConfig(BaseSettings):
+    backend: str = "faster-whisper"
     model_size: str = "small"
     device: str = "cpu"
     compute_type: str = "int8"
     language: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[SecretStr] = None
+    model_by_language: Optional[dict[str, str]] = None
 
 
 class Settings(BaseSettings):

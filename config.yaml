@@ -25,7 +25,14 @@ diarization:
   max_speakers: 16 # Cap on distinct speaker buckets
 
 transcription:
-  model_size: "small" # faster-whisper alias or any HF model id; "large-v2" for best quality, "deepdml/faster-whisper-large-v3-turbo-ct2" on GPU
-  device: "cpu" # set "cuda" if you have a working GPU build
-  compute_type: "int8" # use "float16" with cuda
-  language: en # Set a language code (e.g. "pt", "en", "es") or leave null for auto-detect
+  backend: "faster-whisper" # or "openai-http" to talk to Ollama / OpenAI / any /v1/audio/transcriptions endpoint
+  model_size: "small" # faster-whisper alias, HF model id, or Ollama model name when backend is openai-http
+  device: "cpu" # set "cuda" if you have a working GPU build (faster-whisper only)
+  compute_type: "int8" # use "float16" with cuda (faster-whisper only)
+  language: en # Set a language code (e.g. "pt", "en") or leave null for auto-detect (recommended for PT/EN code-switching)
+  # openai-http only:
+  # base_url: "http://localhost:11434/v1" # defaults to models.llm_base_url
+  # api_key: # defaults to models.llm_api_key
+  # model_by_language: # optional per-language override; only kicks in when `language` is set explicitly
+  #   pt: "sendmeaiohyeah/whisper-large-v2"
+  #   en: "sendmeaiohyeah/whisper-large-v2"
