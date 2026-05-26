@@ -8,8 +8,6 @@ from bailiff.features.assistant.rag import RagEngine
 
 logger = logging.getLogger("bailiff.assistant.service")
 
-# TODO: I should send recent transcription segments to the LLM to provide context for questions 
-# like "what did I just say?" or "what was the last thing I said?"
 
 class AssistantService:
     """
@@ -18,7 +16,7 @@ class AssistantService:
     This service listens for questions on the question queue, retrieves relevant context using the
     RAG engine (communicating with MemoryService), and produces answers via the LLM.
     """
-    def __init__(self, 
+    def __init__(self,
         question_queue: ProcessQueue,
         answer_queue: ProcessQueue,
         memory_queue: ProcessQueue,
@@ -32,14 +30,11 @@ class AssistantService:
         self.rag_engine = None
         self.llm = None
         self.vector_db = None
-        self.session_id = str(session_id) 
-    
+        self.session_id = str(session_id)
+
     def run(self):
-        """
-        Runs the assistant service.
-        """
         from bailiff.core.config import settings
-        
+
         api_key = settings.models.llm_api_key.get_secret_value() if settings.models.llm_api_key else None
         base_url = settings.models.llm_base_url
         model = settings.models.llm_assistant
@@ -60,8 +55,8 @@ class AssistantService:
             try:
                 question = self.question_queue.get(timeout=0.1)
                 if question is None:
-                    break # None is the signal to stop
-                
+                    break
+
                 logger.info(f"Thinking about question: {question}")
 
                 answer = self.rag_engine.answer_question(question, session_id=self.session_id)
@@ -73,8 +68,23 @@ class AssistantService:
                 logger.error("Error answering question: %s", e)
                 continue
 
-def run_assistant_service(question_queue: ProcessQueue, answer_queue: ProcessQueue, memory_queue: ProcessQueue, rag_queue: ProcessQueue, session_id: int, log_file: str):
-    setup_logging(log_file=log_file)
-    service = AssistantService(question_queue, answer_queue, memory_queue, rag_queue, session_id)
-    service.run()         
-        
+
+def run_assistant_service(
+    question_queue: ProcessQueue,
+    answer_queue: ProcessQueue,
+    memory_queue: ProcessQueue,
+    rag_queue: ProcessQueue,
+    session_id: int,
+    q_health: ProcessQueue,
+    log_file: str,
+):
+    setup_logging(log_file=log_file, worker_name="assistant")
+    try:
+        service = AssistantService(question_queue, answer_queue, memory_queue, rag_queue, session_id)
+        service.run()
+    except Exception as exc:
+        try:
+            q_health.put(("assistant", repr(exc)), timeout=1.0)
+        except Exception:
+            pass
+        raise

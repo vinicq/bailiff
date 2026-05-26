@@ -6,32 +6,48 @@ import torch
 logger = logging.getLogger("bailiff.audio.vad")
 
 
-class VADEngine:
-    """
-    Voice Activity Detection (VAD) engine using Silero VAD.
+def _load_silero_pip():
+    from silero_vad import load_silero_vad
+    model = load_silero_vad()
+    logger.info("Loaded Silero VAD via pip package")
+    return model
 
-    Detects speech in audio chunks to filter out silence and background noise.
-    """
-    def __init__(self, model_name: str = "snakers4/silero-vad", 
-                 threshold: float = 0.6, 
-                 sample_rate: int = 16000):
-        self.model, self.utils = torch.hub.load(model_name, 
-                                                model='silero_vad', 
-                                                force_reload=False,
-                                                onnx=False)
+
+def _load_silero_torch_hub():
+    model, _utils = torch.hub.load(
+        "snakers4/silero-vad",
+        model="silero_vad",
+        force_reload=False,
+        trust_repo=True,
+        onnx=False,
+    )
+    logger.info("Loaded Silero VAD via torch.hub (cached)")
+    return model
+
+
+def _load_silero_model():
+    try:
+        return _load_silero_pip()
+    except Exception as pip_exc:
+        logger.info("silero-vad pip package unavailable (%s); falling back to torch.hub", pip_exc)
+        try:
+            return _load_silero_torch_hub()
+        except Exception as hub_exc:
+            raise RuntimeError(
+                "Silero VAD unavailable: pip package failed (%r) and torch.hub fallback failed (%r). "
+                "Install `silero-vad` or pre-cache snakers4/silero-vad via torch.hub." % (pip_exc, hub_exc)
+            ) from hub_exc
+
+
+class VADEngine:
+    def __init__(self, threshold: float = 0.6, sample_rate: int = 16000):
+        self.model = _load_silero_model()
         self.threshold = threshold
         self.sample_rate = sample_rate
-        self.to_tensor = lambda x: torch.from_numpy(x)
 
-        logger.info("VAD engine loaded: model=%s, threshold=%.2f, sample_rate=%d",
-                     model_name, threshold, sample_rate)
-    
+        logger.info("VAD engine ready: threshold=%.2f, sample_rate=%d", threshold, sample_rate)
+
     def is_speech(self, audio_chunk: np.ndarray) -> bool:
-        """
-        Detect speech in an audio chunk.
-        Returns True if speech is detected, False otherwise.
-        """
-        audio_tensor = self.to_tensor(audio_chunk.flatten())
+        audio_tensor = torch.from_numpy(audio_chunk.flatten())
         speech_prob = self.model(audio_tensor, self.sample_rate).item()
-
         return speech_prob > self.threshold

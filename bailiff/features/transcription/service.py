@@ -1,6 +1,6 @@
 import logging
 import time
-from multiprocessing import Process, Queue as ProcessQueue
+from multiprocessing import Queue as ProcessQueue
 from typing import Callable
 
 from bailiff.core.events import AudioChunk, TranscriptionSegment
@@ -8,7 +8,6 @@ from bailiff.features.transcription.engine import WhisperEngine
 
 logger = logging.getLogger("bailiff.transcription.service")
 
-# TODO: Add a hallucination detection mechanism to avoid non-sense transcriptions, such as "Subtitles by "
 
 class TranscriptionService:
     """
@@ -17,9 +16,9 @@ class TranscriptionService:
     Consumes audio chunks from the input queue, transcribes them using the WhisperEngine,
     and pushes the resulting text segments to the output queue.
     """
-    def __init__(self, 
-                 input_queue: ProcessQueue, 
-                 output_queue: ProcessQueue, 
+    def __init__(self,
+                 input_queue: ProcessQueue,
+                 output_queue: ProcessQueue,
                  engine_factory: Callable[[], WhisperEngine] = lambda: WhisperEngine()):
         self.input_queue = input_queue
         self.output_queue = output_queue
@@ -32,7 +31,7 @@ class TranscriptionService:
         self.engine.load()
 
         logger.info("Transcription service started")
-        
+
         while True:
             try:
                 chunk: AudioChunk = self.input_queue.get()
@@ -43,7 +42,7 @@ class TranscriptionService:
 
                 start_time = time.time()
                 text = self.engine.transcribe(chunk.data)
-                
+
                 if text:
                     end_time = time.time()
                     duration = end_time - start_time
@@ -61,8 +60,21 @@ class TranscriptionService:
                 logger.error("Error in transcription service: %s", e)
                 continue
 
-def run_transcription_service(input_queue: ProcessQueue, output_queue: ProcessQueue, log_file: str | None = None):
+
+def run_transcription_service(
+    input_queue: ProcessQueue,
+    output_queue: ProcessQueue,
+    q_health: ProcessQueue,
+    log_file: str | None = None,
+):
     from bailiff.core.logging import setup_logging
-    setup_logging(log_file=log_file)
-    service = TranscriptionService(input_queue, output_queue)
-    service.run()
+    setup_logging(log_file=log_file, worker_name="transcription")
+    try:
+        service = TranscriptionService(input_queue, output_queue)
+        service.run()
+    except Exception as exc:
+        try:
+            q_health.put(("transcription", repr(exc)), timeout=1.0)
+        except Exception:
+            pass
+        raise

@@ -223,5 +223,4 @@ data/
 # Log files
 *.log
 
-# UV
-uv.lock
+# UV: lockfile committed for reproducible installs (see PR discussion)

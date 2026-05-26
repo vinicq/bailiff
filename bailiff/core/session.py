@@ -82,6 +82,43 @@ class SessionManager:
             threading.Thread(target=self.stop, daemon=True, name="supervisor-stop").start()
             break
 
+    def _build_processes(self) -> list[tuple[str, callable, tuple]]:
+        return [
+            (
+                "audio-ingest",
+                run_ingest_service,
+                (self.q_audio_raw, AudioConfig(), self.q_health, self.log_file),
+            ),
+            (
+                "transcription",
+                run_transcription_service,
+                (self.q_audio_tx, self.q_text, self.q_health, self.log_file),
+            ),
+            (
+                "diarization",
+                run_diarization_service,
+                (self.q_audio_diar, self.q_diarization, self.q_health, self.log_file),
+            ),
+            (
+                "merge",
+                run_merge_service,
+                (self.q_text, self.q_diarization, self.q_merged, self.q_health, self.log_file),
+            ),
+            (
+                "memory",
+                run_memory_service,
+                (self.q_memory, self.q_rag, self.session_id, self.q_health, self.log_file),
+            ),
+            (
+                "assistant",
+                run_assistant_service,
+                (
+                    self.q_question, self.q_answer, self.q_memory, self.q_rag,
+                    self.session_id, self.q_health, self.log_file,
+                ),
+            ),
+        ]
+
     def start(self):
         self._running.set()
 
@@ -91,42 +128,8 @@ class SessionManager:
         self._fanout_thread.start()
 
         self.processes = [
-            multiprocessing.Process(
-                target=run_ingest_service,
-                args=(self.q_audio_raw, AudioConfig(), self.log_file),
-                daemon=True,
-                name="audio-ingest",
-            ),
-            multiprocessing.Process(
-                target=run_transcription_service,
-                args=(self.q_audio_tx, self.q_text, self.log_file),
-                daemon=True,
-                name="transcription",
-            ),
-            multiprocessing.Process(
-                target=run_diarization_service,
-                args=(self.q_audio_diar, self.q_diarization, self.log_file),
-                daemon=True,
-                name="diarization",
-            ),
-            multiprocessing.Process(
-                target=run_merge_service,
-                args=(self.q_text, self.q_diarization, self.q_merged, self.log_file),
-                daemon=True,
-                name="merge",
-            ),
-            multiprocessing.Process(
-                target=run_memory_service,
-                args=(self.q_memory, self.q_rag, self.session_id, self.log_file),
-                daemon=True,
-                name="memory",
-            ),
-            multiprocessing.Process(
-                target=run_assistant_service,
-                args=(self.q_question, self.q_answer, self.q_memory, self.q_rag, self.session_id, self.log_file),
-                daemon=True,
-                name="assistant",
-            ),
+            multiprocessing.Process(target=target, args=args, daemon=True, name=name)
+            for name, target, args in self._build_processes()
         ]
 
         for p in self.processes:

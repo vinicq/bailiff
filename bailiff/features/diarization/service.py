@@ -43,8 +43,16 @@ class DiarizationService:
 def run_diarization_service(
     input_queue: ProcessQueue,
     output_queue: ProcessQueue,
+    q_health: ProcessQueue,
     log_file: str | None = None,
 ):
-    setup_logging(log_file=log_file)
-    service = DiarizationService(input_queue, output_queue)
-    service.run()
+    setup_logging(log_file=log_file, worker_name="diarization")
+    try:
+        service = DiarizationService(input_queue, output_queue)
+        service.run()
+    except Exception as exc:
+        try:
+            q_health.put(("diarization", repr(exc)), timeout=1.0)
+        except Exception:
+            pass
+        raise

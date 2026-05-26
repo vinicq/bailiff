@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "AI-powered meeting assistant with real-time transcription and diarization"
 requires-python = ">=3.10"
 dependencies = [
-    "pyaudiowpatch",
     "numpy",
     "scipy",
     "torch",
@@ -26,6 +25,7 @@ dependencies = [
     "pydantic-settings",
     "pyyaml",
     "huggingface_hub",
+    "silero-vad",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +33,8 @@ test = [
     "pytest>=8.0",
     "pytest-mock",
 ]
+platform-windows = ["pyaudiowpatch"]
+platform-linux = ["sounddevice"]
 
 [project.scripts]
 bailiff = "bailiff.main:main"
